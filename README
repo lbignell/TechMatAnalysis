@@ -1,0 +1,602 @@
+10/23/14
+- I've written a program to read in the .csv files, including parseing the map
+  of sample locations as well. All data are placed into a root tree. There is
+  a separate program for the Gamma irradiations, as a different naming 
+  convention was used.
+  -> The only bit of additional info that is needed to interpret the data files 
+     is the meaning of IDnum. For NSRL vials, this corresponds to the sample
+     composition code (the first part of the label on the vial), or is zero for
+     empty vials. For the gamma irradiations, the same is true wrt the 
+     composition code and empty vials, hoever a value equal to 1 denotes one of
+     the irradiated empty glass vials and a value of 2 denotes an irradiated
+     empty PP vial. -1 denotes a read error for both.
+     ->To be clear; here's a summary of them all:
+
+     -1; read error.
+     0; EMPTY
+     1; irradiated empty glass vial
+     2; irradiated empty PP vial
+     Anything => 50; scintillator composition code.
+
+10/24/14
+- Looking at code for shifting algorithm; the standard deviation as calculated
+  for the t-test is set always equal to 1. There's no notes in my other README
+  about this, and what appears to be the correct implementation has been
+  commented out. I'll try implementing correctly later and see what happens.
+
+10/28/14
+- Results:
+  -> There appears to be a long-term drift in (at least) the pure LS samples.
+     Their light yield has decreased by ~2.5 pc since the first measurements.
+     There may be a similar trend in the gamma irradiation data, but it is
+     difficult to say for sure (not enough data).
+
+  -> Gamma damage to the glass vials: 400 Gy => >10% decrease in light yield
+    (the same for 1 kGy!). No evidence of recovery was seen.
+
+  -> Gamma damage to the PP vials: The light yield first appears to go up (it
+     may not be statistically significant, though repeated measurements bear out
+     the same result, including for the 10% vial samples -- scattering 
+     increase?), then down, so that the 1 kGy sample has lost 3% of the light
+     yield.
+
+  -> The 10% WbLS damage at 1 kGy is ~ 5%; so maybe a little more than the vial
+     damage. That said, they follow the vial damage trend almost exactly.
+
+  -> All spectra appear to have some sort of high frequency distortion. David
+     has suggested that this may be due to a stuck bit in the digitizer.
+
+- More measurements are necessary, of both the gamma-irradiated samples and the
+  NSRL samples.
+
+11/3/14
+- At David's suggestion, I will write a macro to combine repeated measurements
+  of a single vial into a single data point (represented by the mean with an
+  uncertainty equal to the std dev). I can then more easily compare the dose
+  plots.
+
+11/26/14
+- I need to analyse the data for the NSRL-irradiated data, double time so that I
+  can get a plot to Steve Vigdor by Monday.
+  -> I need to write a new macro that:
+     - Gets the mean factor change from the first N measured data points for the
+       each sample, and for the corresponding REF vial.
+     - Uses this mean to compare all future factor changes against.
+     - For each measured sample; I need a function that can find the nearest (in
+       time) corresponding reference measurement.
+     - For the samples; multiply by (REF_Orig/REF_new) to correct for the
+       instrument response.
+  -> The currently; I'm looking at ShiftingAlgorithm for all of one type of 
+     sample (eg. 5% WbLS). What I really should do is write a macro that will
+     run it repeatedly for all sample names, over all measurements.
+
+- I essentially want to make a plot of relative change vs time for all data
+  points. Ideally; I'd also have an uncertainty associated with each datum.
+  I think that David's approach of taking the stdev of 2-3 points measured
+  within a 24 hr period is not valid if there is some change in the instrument
+  response on that time scale. An alternative would be to try to correct for
+  instrument drift first; then look at the resulting spread. I can do this using
+  the reference samples. In particular; I can look at the samples that are
+  measured just prior to the reference samples; and normalise their response to
+  the reference sample response...
+
+- There is a problem with the 'take the mean' idea: all data are actually taken
+  relative to the very first datum (this is the reference set). So if I take the
+  mean I can still be biased. I think a better approach is to calculate an
+  average spectrum based on the first N measurements and use this as the
+  reference instead.
+
+- To do:
+  - Write a macro that: 
+    - Loops over each pre/post irrad folder.
+    - Runs CollectAllLSData.C for each folder.
+    - Adds the output from each run to a TChain.
+      ->There is a problem that I don't understand with parseing the dated on
+      	8 Nov and 9 Nov (no other days).
+	It appears that I should be able to sidestep this problem by requiring
+	TimeStamp>0; as the error causes negative TimeStamps.
+      ->There is another problem with incorrect reading of timestamps, probably
+      	due to my parseing (a manual check of the files reveals nothing
+	unusual). The 'clumping' appears to be for sequential samples, at least.
+	In the end, this won't be very important as it boils down to an error of
+	~1 hour over the month or so of measurements.
+      ->Implemented in AllFoldersCollect.C.
+  - Modify ShiftingAlgorithm so that it calculates an average spectrum shape
+    over the first N entries in the TTree that meet the criteria (this approach
+    will also work for a TChain).
+    -> Done; only works for situations where SampleName branch (rather than	
+       IDNum branch) is used.
+    -> Implemented in ShiftingAlgorithm.C.
+  - Write a TSelector that:
+    - First checks the timestamp of every entry in the chain. Only valid
+      timestamps are passed through to the output.
+    - Creates a file with each unique sample name in the TChain (or TTree).
+    - Creates a tree with all valid-timestamp events.
+    -> AnalyseEverySample_Shifting.C, and Run_AnalyseEverySample_Shifting.c.
+       -> Currently having problems; the code compiles but there is some malloc
+       	  issue when I SetBranchAddress...
+  - Write a macro that:
+    - Runs ShiftingAlgorithm.C for each of the SAMPLES in the created file.
+    - Adds all results to a TChain.
+  - Write another macro that:
+    - Has a function that can find and return the relative change in factor
+      associated with the 'nearest' (in time) REF sample.
+    - For each calculated relative change in factor; correct for the change in
+      the reference measurement.
+
+- What should be a farily simple task of accessing the data and cleaning it up
+  a bit is much more of a headache than it should be. For a reason I don't
+  understand, when I SetBranchAddress in my TSelector; I don't get the data
+  (it isn't even refreshed). Testing interactively in root; I can get
+  SetBranchAddress to work. So maybe it is the TSelector implementation, but I
+  don't know.
+  -> The ways forward are to either:
+     -> Try again; this time without using a TSelector.
+     -> Hack my way through and avoid this step. I should be able to do the rest
+     	(though maybe not the last step) without running into too many problems.
+
+  My inclination is to go for the latter of these options at the moment...
+  -> I've managed to get the SampleName info. I did try to read out without
+     using a TSelector; and I could get the data from the source tree/chain.
+     However; I could not write to a new tree! I don't know why; the error said
+     that I was instansiating the tree prior to the file, but that's not it...
+     In any case it is likely that I'll come across this problem when I try to
+     collect up all of the analysed data.
+     ->I used AltChainRead_Shifting.C to get the names of the samples.
+
+- I can now run ShiftingAlgorithm for all samples in a given run, but only when
+  the data are stored in a TTree! For some reason it seg faults when I try to
+  access the TChain (when I go to GetPtrToVal).
+  -> Macro to call is Run_Shifting_AllSamples.C...
+  
+- Perhaps if I make the TChain in the same file? Alternatively I can just make a
+  shitload of analysis files (1 per sample per run) and stitch them together for
+  my analysis.
+
+- Actually there is a problem with the current version of Run_Shifting_Algorithm
+  because when I try to implement the command to run the algorithm (as a string)
+  for the sample names that have a '\r' at the end; ROOT interprets this as an
+  EOL character! I need to find a way to parse this through.
+  -> Currently I can just skip these problematic samples by removing the '\r'
+     characters from the index file; saved as 'UniqueSampleNames_trunc.txt'.
+
+- Also; I really need to combine my data BEFORE I do my shifting algorithm;
+  otherwise my reference data set is incorrect!!!
+
+
+11/29/14
+- It turns out that ROOT wanted me to change the name of the TChain to something
+  different from the name of the member trees. My code now appears to work...
+  -> AltChainRead_Shifting.C now works.
+
+- Running over all samples with ShiftingAlgorithm seems to work now; though I'm
+  a little dubious as to whether the waveform averaging that I do at the start
+  to form a composite reference value is the correct way to go; looking at the
+  first few samples (the ones forming part of the average); they don't appear
+  to average out to zero...
+
+- However... many of the samples are not included in the results (I'm not sure
+  why at the moment). In particular; NO reference samples are evaluated).
+  -> Trying to fix this ATM by modifying the ShiftingAlgorithm to operate using
+     SetBranchAddress rather than GetBranch...
+
+11/30/14
+- After several more modifications; this is the current status:
+  -> I need to remember to restart ROOT if I'm not getting what I want. I
+     thought it wasn't working for a while before I realised that I just needed 
+     to restart as ROOT was getting confused by seg faults.
+  -> Of greater concern is the fact that if I plot the raw spectra; there are
+     some that are clearly incorrect; which suggests that at least one of my map
+     files is incorrect. (I wonder whether this is correlated with the samples
+     whose timestamps are parsed incorrectly?). In practice it should be fairly
+     easy to discriminate these data if I can't fix the problem before Monday.
+  -> There appears to be some systematic problem with the Factor values; but
+     the problem is only an issue for the "EMPTY" vials.
+
+- Remaining To Do:
+  -> Write a function that will, for each (1-Factor/RefEnd):
+     - Normalize all data to the first (or average of first 4) value(s).
+     - Find the nearest REF vial. Apply a correction equal to (thisREF/origREF).
+
+12/1/14
+- The correction to the data takes ages and I forgot to add the timestamp to
+  the tree. Fixed and re-running.
+
+- I can also just make a histogram of pre- and post-irradiation measurements,
+  and check for consistency (across all samples).
+  -> This works surprisingly well...
+
+- Evaluating Corrected_* data (ChainedFinalData.root):
+  - Implementing the correction does not appear to improve the stability of the
+    measurements (the stdev is larger for the corrected samples of 5% and pure
+    LS). I think the simpler approach may also be better.
+
+2014-12-19
+- Making changes to the code to try and address the following issues:
+  - Occasional negative TimeStamps.
+  - Occasional mis-identified vials.
+  - Discontinuities in chisq distribution.
+  - Determination of statistical significance for algorithm.
+  - Make the code less ugly and run faster.
+  - Most importantly; why does the correction back to the reference values not 
+    improve stability (is it even correcting)?
+
+- I also want to improve my algorithm to account for the change in sensitivity
+  of the LS over time; I want to normalize to the number of counts above some
+  threshold when I compare the test and reference data sets.
+
+- Improved timestamp readout, there's still a problem with the sample that is 
+  measured directly following the summary file; but this isn't a huge issue as
+  I can pretty readily filter this file.
+
+- Modified AllFoldersCollect.C (the macro where I initially grab all of the
+  samples from the sub-folders) to merge the TChain into a TTree. This has the
+  advantage that I can eliminate (or move) all of the Collected_*.root files as
+  the output file is not linked to these. It uses a little more disk space, but
+  the files are small at this stage...
+  -> To run; .x AllFoldersCollect.C+()
+
+2015-03-26
+- I've split all previous analysis off into the 2014/ sub-folder.
+- I'm refreshing myself on the use of all of the functions I've written, and
+  modifying these functions for the 2015 data as I go.
+
+  * CollectAllLSData.C: Collects all LS data in a directory and writes them to
+    a ROOT file.
+    - Added explicit protection against samples named "0" (no sample).
+    - Added a new string branch to the tree 'Formulation' that is "A" for
+      WbLS-A, "B" for WbLS-B, and "" for all others.
+    - Modified data file readout as there is now no Horrock's number. Hnum is
+      kept as a branch but is always 0.
+    - Modified the map file's suffix so that it no longer expects "_Info.csv",
+      it is now just ".csv".
+    - Added an 'absolute position relative to the first vial' branch to the tree
+      called AbsPos.
+    - Added capability to determine the dose from the file name.
+    - NOTE: there is an error in the LS6500 software; when the measurements
+      reach the beginning of the cycle again the timestamp is always less than
+      the actual measurement time by 1 hour!
+
+  * AnalyseEverySample_Shifting.C: inherits from a TSelector and claims it reads
+    the .root file generated by CollectAllData.C, makes a vector of unique
+    sample names, runs ShiftingAlgorithm.C for each of these samples, and
+    combines the results into a TChain that is written out. However, it does NOT
+    appear to call ShiftingAlgorithm.C.
+    - I also need to add the 'Formulation', 'Dose', and 'AbsPos' branches.
+    - Actually, IIRC, this function was only used to generate the file name as
+      it didn't work properly to call the shifting algorithm.
+  * AltChainRead_Shifting.C: claims it tries to do the same as 
+    AnalyseEverySample_Shifting.C without using a TSelector.
+  * Run_Shifting_AllSamples.C: Loops over all samples of a given name or a given
+    type in SampleNames_trunc.txt and runs ShiftingAlgorithm.C for each. The
+    results are stored in a chain. Takes arguments to determine the threshold
+    bin index below which the shifting isn't done, and a final 'NumAvg'
+    parameter which isn't documented.
+    - Currently ShiftingAlgorithm expects the input file to have a TChain, not
+      a TTree, changing this.
+    - Removed references to hnum, added refs to MeasNum, Dose, Formulation ("A"
+      or "B" or ""), and AbsPos (the position relative to the 1st vial in the
+      measurement).
+    - Made changes to the significance test. Instead of the convoluted and
+      probably incorrect method I was using, I'm now using the chi2 and doing
+      TMath::Prob. It appears to work well.
+
+      Program flow:
+      * Reads in the tree contained within the specified file.
+      * Reads in the reference data set. When running by sample name rather than
+      	sampleID an average over the first 'numEntries' spectra is taken as a
+	reference.
+      * Initialises the required variables for the shifting calc, as well as a
+      	tree to store all of the outputs in.
+      * Loops over all of the entries in the input tree:
+      	* First checks if it the correct IDnum/sample name and collects the
+	  spectral data, scaling the test data to the ref data using the
+	  integrated number of counts.
+	* Loops over the reference and test data sets and calculates the Chi2
+	  vals. The Chi2 for the past N data points is used to evaluate whether
+	  the test data have differed in a statistically significant way. The
+	  data must meet this criterion for M consecutive points to be counted.
+	  The channels where the spectra first go above 10 counts and first go
+	  below 10 counts are also gotten.
+	* Does some more initialisation.
+	* Loops the factor in range [-10,90] and calculates the minimum Chi2.
+	* Returns a bunch of parameters.
+
+To Do (ShiftingAlgorithm.C):
+    - I need to modify this so that the reference data set is the next vial,
+      not the first vial (with scaling). Alternatively I can work out the amount
+      of shift for each vial relative to its first (N) measurements, then take
+      the ratio of this vial response with the reference vial. This is probably
+      the best approach, actually.
+    - There is still an issue with this calculation. When Chi2 is plotted, small
+      discontinuities are present at integer values of factor. This is probably
+      associated with the way I'm rebinning, but I can't figure out how exactly
+      for the life of me. I'll proceed for now, but I should revisit this...
+
+To Do (Analysis):
+   - Modify the program that calls ShiftingAlgorithm; Run_Shifting_AllSamples.C.
+   - Write a working function that will correct each sample to their respective
+     reference. I have Run_CorrectRef.C as a starting point but IIRC it doesn't
+     work.
+
+2015-03-30
+- Working values for minimum threshold:
+  * 005A = 20
+  * 005B = 20
+  * 010A = 25
+  * 010B = 30
+  * 014A = 35
+  * 014B = 40
+  * 100 = 300 (I assume the same for vial damage samples also).
+  * EMPTY = 10 (was 7 but I was seg-faulting by not meeting minimum conditions
+    found in ShiftingAlgorithm.C).
+  * STD = 400 (to get Compton edge).
+
+- Algorithm can at least get results now; but there are fixes required.
+  * The 'Formulation' parameter is being lost somewhere; I need to fix this.
+    - Fixed in ShiftingAlgorithm.C.
+  * I need to add a capability to divide by the adjacent reference value.
+  * I need to find a way to limit the sensitivity to the diverging bin value,
+    particularly for low light yield scintillators (10% and 5%).
+  * I should look again (again) at the Chi2 calculation of the shifting
+    algorithm.
+    - Actually, the scaling algorithm gives better results anyway, so I'm using
+      that. There is still some digitization problem associated with the bin
+      values but it is far less severe for this algorithm.
+  * Fix the 'quantized value' problem.
+    - This was caused by some digitization effect in the Chi2, I don't fully
+      comprehend why it occurs, but I've switched to the scaling algorithm
+      anyway so I can ignore it.
+  * I should revisit the scaling algorithm (perhaps it will give more stable
+    results for low light yield?).
+    - Done, see comments above.
+  * Add protection so that there is a minimum length of spectrum over which the
+    shift/scaling is done...
+    - Done: minimum set to 10 bins.
+
+2015-03-31
+- David has made two interesting suggestions:
+  *Rather than do non-integer numbers of bins; do integer bins ONLY and fit the
+   Chi2 to find the minimum. This would only really work for the shifting
+   algorithm.
+  *I could sample my reference data set to estimate the statistical component of
+   the uncertainty.
+
+- Based on my observations of the worst-case events; the effect leads to ~0.5%
+  additional uncertainty in the relative light yield. Maybe that's acceptable?
+  -> I could compare with the results that I get with David's algorithm.
+  -> Actually, if David's algorithm works well enough then I can just use that.
+
+2015-04-02
+- I've implemented a correction to the reference measurement in 
+  CorrectRef_Scaled.C. It appears to work.
+- I am investigating why the ScalingAlgorithm occasionaly gives factor = DBL_MAX
+  (an error condition).
+  -> The cause is that SumSq = 0 for ALL values of factor.
+  -> Forcing the threshold to be lower (= 300) solves the problem, but not the
+     mystery...
+     
+2015-04-03
+- Another issue I face is the fact that certain samples are not being found.
+  This is due to a windows text file issue (the \r not being ignored).
+  -> Fixed this now, it shouldn't happen again.
+  New additions:
+  - Changed AltChainRead_Shifting.C to MakeListOfSamples.C to save confusion.
+    Also overhauled it so that it ignores "\r" and made the output file name
+    an argument.
+  - CollectAllLSData.C now removes "\r" from the end of a sample name.
+  - Run_Scaling_AllSamples: the sample list file is passed as an argument.
+  - Run_CorrectRef.C: the sample list and the .root file names are passed as
+    arguments.
+
+- Fixed issue with CorrectRef_Scaled.C to ignore anything with the suffix
+  'Leach'.
+
+TO DO:
+- I need a new function that I can use to correct the vial damage samples.
+  In the case of these samples, the 'reference' isn't the same vial prior to the
+  irradiaton, rather it is the '_REF' vial that was measured (multiple times)
+  after the irradiated vial sample. I should be able to steal code from
+  ScalingAlgorithmv2.C and CorrectRef_Scaled.C to achieve what I want.
+
+2015-04-06
+- Checking reproducibility of measurements prior to irradiation, using Gaussian
+  fits to the distribution.
+  Pure LS: Mean = 1.00032 +/- 0.00056, stdev = 0.002468 +/- 0.000826
+  14% WbLS: Mean = 0.99939 +/- 0.00022, stdev = 0.00148 +/- 0.00023
+  10% WbLS: Mean = 1.00055 +/- 0.00070, stdev = 0.00369 +/- 0.00012
+  5% WbLS: Mean = 1.00001 +/- 0.00033, stdev = 0.00239 +/- 0.00049
+
+- I've written a script to correct for the vial damage. It is close to working
+  but doesn't appear to give correct results. I need to check that everything is
+  being calculated correctly (look at the input data).
+
+2015-04-07
+- It turns out the script was working; I just need to set a cut on the
+  irradiation time, so that only events occurring after this time are plotted.
+  The results look ok.
+
+- Implementing a threshold-based algorithm a la David:
+  - CollectAllLSData: Added 'ComptonEdge' branch, which stores a variable that
+    corresponds to the (interpolated) index at which the spectrum falls below 
+    some pre-defined threshold value.
+  - ShiftingAlgorithm: Used the ComptonEdge value to get an average over the
+    reference data sets and also get an estimate of the relative light yield for
+    all other data sets by taking the ratio of their edge to the reference
+    value.
+
+2015-04-09
+- Testing threshold algorithm:
+  - Results seem to predict smaller reductions in light yield, but I think this
+    is for a similar reason to the ShiftingAlgorithm's erroneous predictions.
+
+Summary of CERF results:
+- Analysis with the Shifting algorithm seems to be most reliable, despite issue
+  with discontinuities in the Chi2.
+- There is damage to the scintillator, in addition to vial damage, evident at
+  2 kGy.
+- There appears to be an enhancement to the light yield at the 100 Gy level.
+- There is a clear time dependence to the light yield following irradiation.
+- It is not entirely clear whether the time dependence is due to the vial, the
+  scintillator, or both.
+
+2015-04-20
+- Preliminary analysis of NSRL samples:
+  - All samples appear to exhibit time-dependence after reference-correcting and
+    before vial correcting. The light yield decrease at maximum time (~1 week
+    post irradiation) appears to be ~5%.
+  - Looking at total counts; there doesn't appear to be any long-lived
+    radioactive impurity.
+  - The irradiated vial results; there appears to be a similar time dependence
+    in the PP vial damage. Not so with the HDPE vial damage.
+
+2015-04-21
+- Once the vial damage is accounted for, pretty much all time-dependence
+  disappears.
+
+- Looking at outlier in '005A_F13' pre-irrad data set. The data look ok to me,
+  there's no obvious cause for the outlier; it is a little high, though so is
+  the reference vial that was measured immediately afterwards.
+
+- I also need to look into why 014A_F23 data seems to be missing from the
+  analysis.
+
+- I've generated some simulated data of the Compton edge. I can smear these data
+  with a Gaussian to model the effect of photostatistics, then benchmark the
+  performance of the smeared algorithm, by multiplying by a known factor then
+  finding what the algorithm reproduces.
+  -> This will work best if I script it to automate the whole process...
+  -> I've stolen my old convolution function as a starting point.
+
+2015-04-22
+- I've implemented something that looks like a correct algorithm; but I need to 
+  take care to normalise the convolution correctly ->Done.
+
+- I need a function that will multiply every entry in the synthetic data tree by
+  a factor prior to performing the convolution.
+  ->Done.
+
+2015-04-23
+- There is clearly some bias introduced by using my algorithm; and it tends to
+  underestimate the loss (or gain) in light yield. The extent of the bias
+  depends upon the detector energy resolution (the amount of bias doubles when
+  the energy resolution is changed from 10% @ 662 keV to 15% @ 662 keV).
+
+- Taking a closer look at the simulated spectrum; it isn't that great of a
+  reproduction of the pure LS. The resolution is just too great. Also, there
+  is a much larger population of low energy deposit events; presumably from 
+  gamma rays that scatter on the way in (or scatter out then scatter in again).
+  -> I'm making a second pass at the simulation to try and improve its fidelity.
+     I've added a Pb shield axially around the LS, (3" diameter, 1" thick) and
+     I've made the source isotropic. This seriously cuts down on the number of
+     events that contribute to the result, but I've moved the source closer
+     (0.5" outside the vial) and the simulation is still fast.
+  -> Comparing the new simulation with PureLS suggests that ~5.5% resolution is
+     best (was 10%). This drastically cuts down the bias.
+     10 and 14% WbLS show similar shape; they're fit by ~14.5% resolution.
+     5% WbLS is fit by 20.5% resolution, with threshold at 300 keV (all others
+     were at 200 keV).
+     Scaling algorithm still outperforms threshold algorithm for all samples,
+     but the bias gets worse with theshold and resolution.
+
+2015-04-24
+- I'm fitting the bias with 2nd order polynomial:
+  5% WbLS: p0 = 1.89488, p1 = -1.47223, p2 = 0.57702
+  10/14% WbLS: p0 = 1.38838, p1 = -0.602891, p2 = 0.214314
+  Pure LS: p0 = 1.12056, p1 = -0.199103, p2 = 0.0786492
+
+- One way to solve this issue is to correct every measurement using the above
+  fits to the algorithm bias. I'm unsure what the uncertainty of this correction
+  would be...
+
+- In any case; I'm running the analysis again with the corrections turned on.
+
+- Light yield results;
+
+			(Results prior to Irrad)	(Results after Irrad)
+  Sample Name	Dose	Mean	 Std dev  		Mean	 Std dev
+  005A_F13	800 Gy	1.0003	 0.0042			0.9724	 0.0041
+  005A_F14	800 Gy	1.0002	 0.0024			0.9678	 0.0062
+  005A_R13	300 Gy	1.0000	 0.0033			0.9860	 0.0039
+  005A_R14	300 Gy	1.0004	 0.0029			0.9886	 0.0054
+  010A_F15	800 Gy	1.0016	 0.0032			0.9985	 0.0035
+  010A_F25	800 Gy	0.9986	 0.0021			0.9877	 0.0024
+  010A_R15	300 Gy	1.0002	 0.0016			0.9999	 0.0039
+  010A_R25	300 Gy	1.0011	 0.0016			1.0039	 0.0033
+  014A_F23	800 Gy	NOT PRESENT
+  014A_F33	800 Gy	0.9995	 0.0018			1.0021	 0.0052
+  014A_R23	300 Gy	1.0026	 0.0020			1.0076	 0.0051
+  014A_R33	300 Gy	1.0002	 0.0014			1.0022	 0.0045
+  100_F34	800 Gy	0.9949	 0.0019			0.9868	 0.0028
+  100_F35	800 Gy	1.0014	 0.0030			0.9854	 0.0034
+  100_R34	300 Gy	1.0018	 0.0020			1.0012	 0.0036
+  100_R35	300 Gy	0.9995	 0.0027			1.0027	 0.0035
+
+2015-04-26
+- Analysis of re-measured NSRL samples:
+  - There is an *apparent* increase in the light yield; but really it is a
+    mis-match of the vial measurements. Also, the vial damage continues to
+    degrade (there does not appear to be a degradation of the LS relative to the
+    vial).
+    -> So, I think the way forward is to take the scintillator out of the vial
+       and measure relative to a reference.
+
+2015-04-28
+- I had a go at re-doing the analysis of the 2014 NSRL data. There just aren't
+  enough reference vial measurements...
+
+- I've made a new algorithm implementation, this time to handle measurements
+  where the irradiated (and reference) scintillator has been removed and put
+  into an unirradiated vial. The new function name is ScalingCorrectRef.C.
+  I can't test this until the data has finished acquiring.
+
+2015-04-29
+- Analysing measurements of irradiated scintillator in unirradiated vials:
+  (Results are in the paper).
+
+2015-06-01
+- Analysing re-measured CERF results in unirradiated vials.
+  -> Some results appear to be problematic, and there is significant sample-to-
+     sample variation, especially for 5% WbLS at 100 Gy irradiation.
+     -> Checked samples; there is some crap in the bottom of certain vials.
+     	However, these don't appear to be correlated with the problematic
+	results.
+
+2015-06-03
+- Analysing the systematics check for volume changes and vial leaching. For the
+  volume changes, the 10 mL vial will be used as the reference, for the vial
+  leaching, because of the layout the *next* vial will be used as the reference.
+  - There is no observable leaching. The leaching can't explain the measured
+    changes in the LY.
+  - Volume changes: there is no trend evident, but significant sample-to-sample
+    variation.
+
+2015-06-15
+- I'm analysing the re-measured NSRL15A samples.
+  -> It is inconclusive whether the 14% samples were switched, as there has been
+     so much sample degradation occur that the results are all over the shop.
+  -> All other samples exhibit a small reduction in the relative LY, suggesting
+     there may be some long-term damage component.
+
+2015-06-22
+- Re-analysis of the old CERF (re-dispensed) samples. There is (again) a great
+  deal of sample-to sample variation, making it difficut to conclude anything.
+  There does appear to be a trend that reduced light yield with increasing dose,
+  but it is hard to conclude anything quantitative because I don't trust the
+  sample quality.
+
+2015-06-23
+- Re-analysis of 2014 NSRL data (low dose): They all suggest no change within
+  the uncertainties. I'm including this as a low-dose data point in the paper.
+
+2015-06-30
+- Revisited simulated bias after Chao's comment about the energy-dependent 
+  resolution broadening.
+  -> The change in resolution (assumed all statistical) accounts for about half
+     of the bias.
+
+2015-07-08
+- Re-analysis of bias fitting in light of Chao's comments:
+  5% WbLS: p0 = 1.32705, p1 = -0.518823, p2 = 0.191817
+  10/14% WbLS: p0 = , p1 = , p2 = [not redone]
+  Pure LS: p0 = 1.11252, p1 = -0.18939, p2 = 0.0768342
